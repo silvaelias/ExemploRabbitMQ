@@ -1,31 +1,74 @@
 package br.ufs.dcomp.ExemploRabbitMQ;
 
-import com.rabbitmq.client.Channel;
-import com.rabbitmq.client.Connection;
-import com.rabbitmq.client.ConnectionFactory;
+import com.google.protobuf.InvalidProtocolBufferException;
+
+import br.ufs.dcomp.ExemploRabbitMQ.MensagemOuterClass.Conteudo;
+import br.ufs.dcomp.ExemploRabbitMQ.MensagemOuterClass.Mensagem;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Map;
+import java.util.Scanner;
+
+import com.rabbitmq.client.*;
+import com.rabbitmq.client.*;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.concurrent.TimeoutException;
+
+import com.rabbitmq.client.*;
+
+import java.io.IOException;
+
+import com.rabbitmq.client.*;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 
 public class Emissor {
+    private static final String EXCHANGE_NAME = "chat_exchange";
+    private Connection connection;
+    private Channel channel;
 
-  private final static String QUEUE_NAME = "minha-fila";
+    public Emissor() throws TimeoutException {
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setHost("192.168.1.252");
+        factory.setUsername("admin"); // Nome de usuário padrão
+        factory.setPassword("password"); // Senha padrão
+        factory.setVirtualHost("/");
+        try {
+            connection = factory.newConnection();
+            channel = connection.createChannel();
+            channel.exchangeDeclare(EXCHANGE_NAME, "direct");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 
-  public static void main(String[] argv) throws Exception {
-    ConnectionFactory factory = new ConnectionFactory();
-    factory.setHost("ip-da-instancia-da-aws"); // Alterar
-    factory.setUsername("usuário-do-rabbitmq-server"); // Alterar
-    factory.setPassword("senha-do-rabbitmq-server"); // Alterar
-    factory.setVirtualHost("/");    Connection connection = factory.newConnection();
-    Channel channel = connection.createChannel();
+    public void sendFile(String destination, byte[] fileBytes, String mimeType, String fileName) throws IOException {
+        String routingKey = getRoutingKey(destination);
+        Map<String, Object> headers = new HashMap<>();
+        headers.put("fileName", fileName);
 
-                      //(queue-name, durable, exclusive, auto-delete, params); 
-    channel.queueDeclare(QUEUE_NAME, false,   false,     false,       null);
+        AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
+                .contentType(mimeType)
+                .headers(headers)
+                .build();
 
-    String message = "Olá!!!";
-    
-                    //  (exchange, routingKey, props, message-body             ); 
-    channel.basicPublish("",       QUEUE_NAME, null,  message.getBytes("UTF-8"));
-    System.out.println(" [x] Mensagem enviada: '" + message + "'");
+        channel.basicPublish(EXCHANGE_NAME, routingKey, props, fileBytes);
+    }
 
-    channel.close();
-    connection.close();
-  }
+    private String getRoutingKey(String destination) {
+        if (destination.startsWith("#")) {
+            return "group." + destination.substring(1);
+        } else if (destination.startsWith("@")) {
+            return "user." + destination.substring(1);
+        } else {
+            throw new IllegalArgumentException("Destinatário inválido.");
+        }
+    }
 }

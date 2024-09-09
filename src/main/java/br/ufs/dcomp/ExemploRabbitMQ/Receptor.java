@@ -1,38 +1,81 @@
 package br.ufs.dcomp.ExemploRabbitMQ;
 
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.DeliverCallback;
+
+import com.rabbitmq.client.*;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Date;
+import java.util.concurrent.TimeoutException;
+
 import com.rabbitmq.client.*;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+import com.rabbitmq.client.*;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
 public class Receptor {
+    private static final String EXCHANGE_NAME = "chat_exchange";
+    private static final String DOWNLOAD_DIR = "/home/tarcisio/chat/downloads";
+    private Connection connection;
+    private Channel channel;
 
-  private final static String QUEUE_NAME = "minha-fila";
+    public Receptor() throws TimeoutException {
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setHost("192.168.1.252");
+        factory.setUsername("admin"); // Nome de usuário padrão
+        factory.setPassword("password"); // Senha padrão
+        factory.setVirtualHost("/");
+        try {
+            connection = factory.newConnection();
+            channel = connection.createChannel();
+            channel.exchangeDeclare(EXCHANGE_NAME, "direct");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 
-  public static void main(String[] argv) throws Exception {
-    ConnectionFactory factory = new ConnectionFactory();
-    factory.setHost("ip-da-instancia-da-aws"); // Alterar
-    factory.setUsername("usuário-do-rabbitmq-server"); // Alterar
-    factory.setPassword("senha-do-rabbitmq-server"); // Alterar
-    factory.setVirtualHost("/");   
-    Connection connection = factory.newConnection();
-    Channel channel = connection.createChannel();
+    public void startListening(String queueName) throws IOException {
+        channel.queueDeclare(queueName, false, false, true, null);
+        channel.queueBind(queueName, EXCHANGE_NAME, queueName);
+        DeliverCallback deliverCallback = (consumerTag, delivery) -> {
+            byte[] body = delivery.getBody();
+            String mimeType = delivery.getProperties().getContentType();
+            String fileName = (String) delivery.getProperties().getHeaders().get("fileName");
+            String sender = delivery.getEnvelope().getRoutingKey().split("\\.")[1];
+            saveFile(fileName, body);
+            System.out.println(new SimpleDateFormat("dd/MM/yyyy 'às' HH:mm").format(new Date()) +
+                    " Arquivo \"" + fileName + "\" recebido de @" + sender + "!");
+        };
+        channel.basicConsume(queueName, true, deliverCallback, consumerTag -> {});
+    }
 
-                      //(queue-name, durable, exclusive, auto-delete, params); 
-    channel.queueDeclare(QUEUE_NAME, false,   false,     false,       null);
-    
-    System.out.println(" [*] Esperando recebimento de mensagens...");
-
-    Consumer consumer = new DefaultConsumer(channel) {
-      public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)           throws IOException {
-
-        String message = new String(body, "UTF-8");
-        System.out.println(" [x] Mensagem recebida: '" + message + "'");
-
-                        //(deliveryTag,               multiple);
-        //channel.basicAck(envelope.getDeliveryTag(), false);
-      }
-    };
-                      //(queue-name, autoAck, consumer);    
-    channel.basicConsume(QUEUE_NAME, true,    consumer);
-  }
+    private void saveFile(String fileName, byte[] fileBytes) {
+        File file = new File(DOWNLOAD_DIR, fileName);
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(fileBytes);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 }
