@@ -3,98 +3,115 @@
 // Jardel Santos Nascimento
 // Sergio Santana dos Santos
 package br.ufs.dcomp.ExemploRabbitMQ;
-import com.rabbitmq.client.*;
+
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
-import java.util.concurrent.TimeoutException;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Scanner;
+import java.util.concurrent.TimeoutException;
+
+import com.google.protobuf.ByteString;
+
+import br.ufs.dcomp.ExemploRabbitMQ.MensagemOuterClass.Conteudo;
+import br.ufs.dcomp.ExemploRabbitMQ.MensagemOuterClass.Mensagem;
 
 public class Chat {
+
+    private String usuario;
+    private String destinatario;
     private Emissor emissor;
-    private ExecutorService executorService;
+    private Receptor receptor;
 
-    public Chat() throws TimeoutException {
-        emissor = new Emissor();
-        executorService = Executors.newFixedThreadPool(10); // Pool de threads para upload em background
+    public Chat(String usuario) throws IOException, TimeoutException {
+        this.usuario = usuario;
+        this.emissor = new Emissor();
+        this.receptor = new Receptor(usuario);
+        iniciarReceptor();
     }
 
-    public void start() {
-        Scanner scanner = new Scanner(System.in);
-        while (true) {
-            System.out.print(getPrompt());
-            String command = scanner.nextLine();
-            if (command.startsWith("!upload")) {
-                handleUploadCommand(command);
+    private void iniciarReceptor() throws IOException {
+        // Receber mensagens e arquivos
+        receptor.receberMensagens(usuario, (consumerTag, delivery) -> {
+            Mensagem mensagem = Mensagem.parseFrom(delivery.getBody());
+            if (mensagem.getConteudo().getTipo().startsWith("text")) {
+                System.out.println("(" + mensagem.getData() + " às " + mensagem.getHora() + ") "
+                        + mensagem.getEmissor() + " diz: " + mensagem.getConteudo().getCorpo().toStringUtf8());
             } else {
-                // Outros comandos
-            }
-        }
-    }
-
-    private void handleUploadCommand(String command) {
-        // Exemplo de comando: !upload /home/tarcisio/aula1.pdf @marciocosta
-        String[] parts = command.split(" ", 3);
-        if (parts.length < 3) {
-            System.out.println("Comando inválido. Uso: !upload <caminho-do-arquivo> <destinatário>");
-            return;
-        }
-
-        String filePath = parts[1];
-        String destination = parts[2];
-
-        Path source = Paths.get(filePath);
-        if (!Files.exists(source)) {
-            System.out.println("Arquivo não encontrado: " + filePath);
-            return;
-        }
-
-        String mimeType = getMimeType(source);
-        byte[] fileBytes;
-        try {
-            fileBytes = Files.readAllBytes(source);
-        } catch (IOException e) {
-            System.out.println("Erro ao ler o arquivo: " + e.getMessage());
-            return;
-        }
-
-        // Exibe a mensagem não bloqueante
-        System.out.println("Enviando \"" + filePath + "\" para " + destination + ".");
-
-        // Envio do arquivo em background
-        executorService.submit(() -> {
-            try {
-                emissor.sendFile(destination, fileBytes, mimeType, filePath);
-                System.out.println("Arquivo \"" + filePath + "\" foi enviado para " + destination + " !");
-            } catch (IOException e) {
-                System.out.println("Erro ao enviar o arquivo: " + e.getMessage());
+                FileMessage fileMessage = FileMessage.fromMensagem(mensagem);
+                System.out.println("(" + mensagem.getData() + " às " + mensagem.getHora() + ") "
+                        + "Arquivo \"" + fileMessage.getFileName() + "\" recebido de @" + mensagem.getEmissor() + "!");
             }
         });
     }
 
-    private String getMimeType(Path path) {
-        try {
-            return Files.probeContentType(path);
-        } catch (IOException e) {
-            return "application/octet-stream"; // Tipo MIME padrão
+    private String getPrompt() {
+        return destinatario == null ? ">> " : destinatario + ">> ";
+    }
+
+    public void iniciar() {
+        Scanner scanner = new Scanner(System.in);
+        while (true) {
+            System.out.print(getPrompt());
+            String input = scanner.nextLine();
+
+            if (input.startsWith("@")) {
+                destinatario = input;
+            } else if (input.startsWith("!upload ")) {
+                String caminhoArquivo = input.replace("!upload ", "");
+                enviarArquivo(caminhoArquivo);
+            } else {
+                enviarMensagem(input);
+            }
         }
     }
 
-    private String getPrompt() {
-        // Prompt personalizado para o usuário ou grupo corrente
-        // Exemplo: Retornar prompt para usuário ou grupo corrente
-        return "@usuario>> "; // Alterar conforme necessário
+    private void enviarMensagem(String texto) {
+        try {
+            Conteudo conteudo = Conteudo.newBuilder()
+                .setTipo("text/plain")
+                .setCorpo(ByteString.copyFrom(texto, StandardCharsets.UTF_8))
+                .build();
+
+            Mensagem mensagem = Mensagem.newBuilder()
+                .setEmissor(usuario)
+                .setData(LocalDate.now().toString())
+                .setHora(LocalTime.now().toString())
+                .setGrupo(destinatario.startsWith("#") ? destinatario : "")
+                .setConteudo(conteudo)
+                .build();
+
+            emissor.enviarMensagem(mensagem, destinatario);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
-    public static void main(String[] args) throws TimeoutException {
-        Chat chat = new Chat();
-        chat.start();
+    private void enviarArquivo(String caminhoArquivo) {
+        try {
+            FileMessage fileMessage = new FileMessage(caminhoArquivo);
+            System.out.println("Enviando \"" + caminhoArquivo + "\" para " + destinatario + ".");
+
+            new Thread(() -> {
+                try {
+                    Mensagem mensagem = fileMessage.toMensagem(usuario, LocalDate.now().toString(), LocalTime.now().toString(), destinatario.startsWith("#") ? destinatario : "");
+                    emissor.enviarMensagem(mensagem, destinatario);
+                    System.out.println("Arquivo \"" + caminhoArquivo + "\" foi enviado para @" + destinatario + "!");
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }).start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void main(String[] args) throws IOException, TimeoutException {
+        System.out.print("User: ");
+        Scanner scanner = new Scanner(System.in);
+        String usuario = scanner.nextLine();
+        Chat chat = new Chat(usuario);
+        chat.iniciar();
     }
 }

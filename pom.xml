@@ -16,7 +16,7 @@
           <archive>
             <manifest>
               <mainClass>
-                br.ufs.dcomp.ExemploRabbitMQ.Emissor
+                br.ufs.dcomp.ExemploRabbitMQ.Chat
               </mainClass>
             </manifest>
           </archive>

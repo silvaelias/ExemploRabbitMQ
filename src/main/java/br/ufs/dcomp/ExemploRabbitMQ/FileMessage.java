@@ -7,17 +7,32 @@ import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 
-public class FileMessage implements Serializable {
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+import com.google.protobuf.ByteString;
+
+import br.ufs.dcomp.ExemploRabbitMQ.MensagemOuterClass.Conteudo;
+import br.ufs.dcomp.ExemploRabbitMQ.MensagemOuterClass.Mensagem;
+
+import java.io.IOException;
+
+public class FileMessage {
+
     private String fileName;
     private String mimeType;
-    private byte[] fileBytes;
+    private byte[] fileContent;
 
-    public FileMessage(String fileName, String mimeType, byte[] fileBytes) {
-        this.fileName = fileName;
-        this.mimeType = mimeType;
-        this.fileBytes = fileBytes;
+    // Construtor para criar um FileMessage a partir do caminho de um arquivo
+    public FileMessage(String filePath) throws IOException {
+        Path path = Paths.get(filePath);
+        this.fileName = path.getFileName().toString();
+        this.mimeType = Files.probeContentType(path);
+        this.fileContent = Files.readAllBytes(path);
     }
 
+    // Getters
     public String getFileName() {
         return fileName;
     }
@@ -26,22 +41,34 @@ public class FileMessage implements Serializable {
         return mimeType;
     }
 
-    public byte[] getFileBytes() {
-        return fileBytes;
+    public byte[] getFileContent() {
+        return fileContent;
     }
 
-    public byte[] serialize() throws IOException {
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
-             ObjectOutputStream oos = new ObjectOutputStream(baos)) {
-            oos.writeObject(this);
-            return baos.toByteArray();
-        }
+    // Método para converter um FileMessage em uma mensagem Protocol Buffers
+    public Mensagem toMensagem(String emissor, String data, String hora, String grupo) {
+        Conteudo conteudo = Conteudo.newBuilder()
+            .setTipo(mimeType)
+            .setNome(fileName)
+            .setCorpo(ByteString.copyFrom(fileContent))
+            .build();
+
+        return Mensagem.newBuilder()
+            .setEmissor(emissor)
+            .setData(data)
+            .setHora(hora)
+            .setGrupo(grupo)
+            .setConteudo(conteudo)
+            .build();
     }
 
-    public static FileMessage deserialize(byte[] data) throws IOException, ClassNotFoundException {
-        try (java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(data);
-             java.io.ObjectInputStream ois = new java.io.ObjectInputStream(bais)) {
-            return (FileMessage) ois.readObject();
-        }
+    // Método estático para converter uma Mensagem Protocol Buffers em um FileMessage
+    public static FileMessage fromMensagem(Mensagem mensagem) throws IOException {
+        String fileName = mensagem.getConteudo().getNome();
+        byte[] fileContent = mensagem.getConteudo().getCorpo().toByteArray();
+        Path path = Paths.get("downloads/" + fileName);
+        Files.createDirectories(path.getParent());
+        Files.write(path, fileContent); // Salva o arquivo na pasta downloads
+        return new FileMessage(path.toString());
     }
 }
